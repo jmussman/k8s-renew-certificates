@@ -48,7 +48,9 @@ There is no requirement to touch the other nodes in the cluster, unless you are 
 against the API (a really bad idea).
 Copy the admin.conf file to the worker nodes if you feel it is necessary.
 
+## See Also
 
+* The Kubernetes installation scripts for various platforms at https://github.com/jmussman/k8s-install-scripts
 
 ## License
 
