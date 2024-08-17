@@ -14,6 +14,9 @@ Instructions for renewing the certificates are difficult to find, but the proces
 The bad part is renewing the certificates requires restarting core system containers, which means
 the cluster will be unavailable temporarily (usually less than 60 seconds).
 
+This script is provided "as-is" without any warranty.
+Administrators should test this in a sandbox before trying to use it in production!
+
 This script was inspired by a [Medium blog post](https://medium.com/@sunilmalik12012/renew-expired-k8s-cluster-certificates-manually-e591ffa4dc6d)
 written by Sunil Malik.
 This post contained the best description and the simplest set of instructions to update the certificates.
