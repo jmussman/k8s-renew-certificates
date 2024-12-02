@@ -2,8 +2,8 @@
 [//]: # (Copyright © 2024 Joel A Mussman. All rights reserved.)
 [//]: #
 
-![Banner Light](./.assets/banner-renew-k8s-certificates-light.png#gh-light-mode-only)
-![banner Dark](./.assets/banner-renew-k8s-certificates-dark.png#gh-dark-mode-only)
+![Banner Light](https://raw.githubusercontent.com/jmussman/cdn-fun/main/banners/banner-k8s-renew-certificates-light.png#gh-light-mode-only)
+![Banner Light](https://raw.githubusercontent.com/jmussman/cdn-fun/main/banners/banner-k8s-renew-certificates-dark.png#gh-dark-mode-only)
 
 # Renew Kubernetes Certificates
 
@@ -32,7 +32,7 @@ The user running the script must have permissions to sudo to root, and be prepar
 ## Guts
 
 The script uses *crictl* to restart the core system containers.
-*crictl* requires a runtime-endpoint to be specified, Providing a default has deprecated.
+*crictl* requires a runtime-endpoint to be specified, providing a default has been deprecated.
 The bulk of this script is to determine what the appropriate runtime-endpoint is!
 
 The script executes these steps:
