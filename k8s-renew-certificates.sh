@@ -132,7 +132,7 @@ if [[ $(pgrep kube-apiserver) ]]; then
     #
 
     echo
-    echo "Renewing certificates; you may be prompted for a password by sudo:"
+    echo "Renewing certificates (be prepared for the sudo):"
 
     sudo kubeadm certs renew all
     sudo kubeadm certs check-expiration
@@ -215,95 +215,96 @@ if [[ $(pgrep kube-apiserver) ]]; then
 
 else
 
-	# Kubernetes is not installed but not running, and this may be due to expiration of the client certificate
+    # Kubernetes is not installed but not running, and this may be due to expiration of the client certificate
     # for kublet. Get the expiration for the client certificate and see if that is the problem:
 
-	echo "Checking kublet certificate expiration..."
+    echo "Checking kublet certificate expiration (be prepared for the sudo)..."
 
-	expiration=$(sudo openssl x509 -enddate -noout -in /var/lib/kubelet/pki/kubelet-client-current.pem \
-		| cut -c10- | date +%s -f -)
+    expiration=$(sudo openssl x509 -enddate -noout -in /var/lib/kubelet/pki/kubelet-client-current.pem \
+        | cut -c10- | date +%s -f -)
 
-	now=$(date +%s)
+    now=$(date +%s)
 
-	echo "certificate expiration timestamp: $expiration (now is $now)"
+    echo "certificate expiration timestamp: $expiration (now is $now)"
 
-	if (( $expiration >= $now )); then
+    if (( $expiration >= $now )); then
 
-		echo "The kubelet client certificate has not expired, this is not a problem this script can fix!"
-		exit 1
+        echo "The kubelet client certificate has not expired, this is not a problem this script can fix!"
+        exit 1
 
-	fi
+    fi
 
-	# Generate new self-signed certificates for kubernetes.
+    # Generate new self-signed certificates for kubernetes.
 
-	echo "The kubelet client certificate has expired"
-	echo "Generating new certificates..."
-	
+    echo "The kubelet client certificate has expired"
+    echo "Generating new certificates..."
+
     sudo kubeadm certs renew all
 
-	# Update the client certificate for kubelet from the generated certificates.
+    # Update the client certificate for kubelet from the generated certificates.
 
-	echo "Fixing the kubelet client certificate..."
+    echo "Fixing the kubelet client certificate..."
 
-	newCertificateFile="/var/lib/kubelet/pki/kubelet-client-$(date +'%y-%m-%d-%H-%M-%S').pem"
+    newCertificateDate="$(date +'%Y-%m-%d-%H-%M-%S').pem"
+    newCertificateFile="/var/lib/kubelet/pki/kubelet-client-${newCertificateDate}"
 
-	sudo cat /etc/kubernetes/pki/apiserver-kubelet-client.crt /etc/kubernetes/pki/apiserver-kubelet-client.key \
-		> $newCertificateFile
-	sudo rm -f /var/lib/kubelet/pki/kubelet-client-current.pem
-	sudo ln -s $newCertificateFile /var/lib/kubelet/pki/kubelet-client-current.pem
+    sudo cat /etc/kubernetes/pki/apiserver-kubelet-client.crt /etc/kubernetes/pki/apiserver-kubelet-client.key > "/tmp/${newCertificateDate}"
+    sudo mv "/tmp/${newCertificateDate}" "${newCertificateFile}"
+    sudo rm -f /var/lib/kubelet/pki/kubelet-client-current.pem
+    sudo ln -s $newCertificateFile /var/lib/kubelet/pki/kubelet-client-current.pem
 
-	# Force a restart of kubelet.
+    # Force a restart of kubelet.
 
-	echo "Restarting kublet service"
+    echo "Restarting kublet service"
 
-	sudo systemctl restart kubelet
+    sudo systemctl restart kubelet
 
-	# Fix the user config to use kubectl.
+    # Fix the user config to use kubectl.
 
-	echo "Updating credentials for kubectl..."
+    echo "Updating credentials for kubectl..."
 
-	mv -f ~/.kube/config ~/.kube/config.old
-	sudo cp /etc/kubernetes/admin.conf ~/.kube/config
-	sudo chown $(id -u):$(id -g) ~/.kube/config
+    mv -f ~/.kube/config ~/.kube/config.old
+    sudo cp /etc/kubernetes/admin.conf ~/.kube/config
+    sudo chown $(id -u):$(id -g) ~/.kube/config
 
-	# Save the join command to rejoin the nodes.
+    # Save the join command to rejoin the nodes.
 
-	joinCommand=$(kubeadm token create --print-join-command)
+    joinCommand=$(kubeadm token create --print-join-command)
 
-	# Get the list of worker nodes.
+    # Get the list of worker nodes.
 
-	echo "Preparing to rejoin worker nodes to the cluster."
-	echo "There will be a delay of one-two minutes while kublets on each node is restarted"
-	echo "because of errors that may be ignored, so be patient!"
-	echo
+    echo "Preparing to rejoin worker nodes to the cluster."
+    echo "There will be a delay of one-two minutes while kublets on each node is restarted"
+    echo "because of errors that may be ignored, so be patient!"
+    echo
 
-	readarray -t nodelist <<<"$(kubectl get nodes -o wide)"
+    readarray -t nodelist <<<"$(kubectl get nodes -o wide)"
 
-	for node in "${nodelist[@]}"; do
+    for node in "${nodelist[@]}"; do
 
         # Break each node apart at the spaces, we only care about elements 1, 2, and 5
         # so following element values that may have spaces are not an issue.
 
-		nodestripped=$(echo "$node" | tr -s ' ')
-		readarray -d ' ' -t nodeelements <<<"$nodestripped"
+        nodestripped=$(echo "$node" | tr -s ' ')
+        readarray -d ' ' -t nodeelements <<<"$nodestripped"
 
-		if [[ "${nodeelements[1]}" == 'NotReady' && "${nodeelements[2]}" == '<none>' ]]; then
+        if [[ "${nodeelements[1]}" == 'NotReady' && "${nodeelements[2]}" == '<none>' ]]; then
 
             # This is a worker node that has lost connection because of the certificates.
 
-			ipaddress=${nodeelements[5]}
+            ipaddress=${nodeelements[5]}
 
-			# Run the join command on each node; running this on a node previously joined will
+            # Run the join command on each node; running this on a node previously joined will
             # hang for a minute or too. Be patient on each node.
 
-			echo "Rejoining node ${nodeelements[0]} ($ipaddress) to the cluster;" \
-				"be prepared with the root password:"
-			echo "ssh root@${ipaddress} \"$joinCommand --ignore-preflight-errors=all\""
+            echo "Rejoining node ${nodeelements[0]} ($ipaddress) to the cluster;" \
+                "be prepared with the root password:"
+            echo "ssh root@${ipaddress} \"$joinCommand --ignore-preflight-errors=all\""
 
-			ssh root@${ipaddress} "$joinCommand --ignore-preflight-errors=all"
-		fi
-	done
+            ssh root@${ipaddress} "$joinCommand --ignore-preflight-errors=all"
+        fi
+    done
 
-	echo
-	echo "Finished"
+    echo
+    echo "Finished"
 fi
