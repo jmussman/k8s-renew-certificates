@@ -55,7 +55,7 @@ fi
 # Make sure kubelet is running
 #
 
-if [[ ! $(pgrep kubelet) ]]; then
+if [[ ! $(pgrep kube-apiserver) ]]; then
 
 	# Get the expiration for the client certificate for kubelet and see if that is the problem
 
@@ -219,7 +219,7 @@ else
     #
 
     echo
-    echo "Restarting system containers:"
+    echo "Restarting system containers; there may be socket errors as retries happen during restart:"
 
     containerIds=()
 
