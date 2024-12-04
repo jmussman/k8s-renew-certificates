@@ -15,8 +15,16 @@
 #
 # This script has been tested on Kubernetes 1.23 and 1.28 clusters.
 #
-# Change the mode of this script to executable and run in in bash; commands requiring elevated
-# privileges will use sudo during the execution of the script.
+# Change the mode of this script to executable and run in the bash shell. Commands requiring
+# elevated privileges will use sudo during the execution of the script.
+#
+# This script has two modes. The first is to do an in-place update of the certificates, which
+# will also update the nodes. The other edge-case is where Kubernetes will not start on the
+# control plane because of an expired Kublet client certificate. That has to be handled
+# differently; the nodes must be rejoined manually after the certificates have been generated
+# and Kubernetes starts.
+#
+# In-Place Update:
 #
 # crictl requires a runtime-endpoint now, the defaults have been deprecated. The bulk of
 # this script is to determine what the appropriate runtime-endpoint is.
@@ -33,6 +41,17 @@
 #
 # There is no requirement to touch the other nodes, unless you are using them to issue commands
 # against the API (really bad idea), but copy the admin.conf file if you feel it is necessary.
+#
+# Edge-case where Kubernetes will not start:
+#
+# The script executes these steps:
+#
+#   1. Verify an expired certificate is the problem and show the expiration of the current certificate.
+#   2. Renew the certificates.
+#   3. Copy the new certificate to the Kublet configuration.
+#   4. Start Kubernetes.
+#   5. Copy the new /etc/kubernetes/admin.conf file to ~/.kube/config
+#   6. Identify the worker nodes and use an ssh command to rejoin each one.
 #
 
 containers=('kube-apiserver' 'kube-scheduler' 'kube-controller-manager' 'etcd')
@@ -52,103 +71,18 @@ if [[ -z $(which crictl) || -z $(which kubeadm) || -z $(which kubectl) ]]; then
 fi
 
 #
-# Make sure kubelet is running
+# Make sure Kubernetes is running
 #
 
-if [[ ! $(pgrep kube-apiserver) ]]; then
-
-	# Get the expiration for the client certificate for kubelet and see if that is the problem
-
-	echo "Checking kublet certificate expiration..."
-
-	expiration=$(sudo openssl x509 -enddate -noout -in /var/lib/kubelet/pki/kubelet-client-current.pem \
-		| cut -c10- | date +%s -f -)
-
-	now=$(date +%s)
-
-	echo "certificate expiration timestamp: $expiration (now is $now)"
-
-	if (( $expiration >= $now )); then
-
-		echo "The kubelet client certificate has not expired, this is not a problem we can fix"
-		exit 1
-
-	fi
-
-	# Generate new self-signed certificates for kubernetes
-
-	echo "The kubelet client certificate has expired"
-	echo "Generating new certificates..."
-	
-    sudo kubeadm certs renew all
-
-	# Update the client certificate for kubelet
-
-	echo "Fixing the kubelet client certificate..."
-
-	newCertificateFile="/var/lib/kubelet/pki/kubelet-client-$(date +'%y-%m-%d-%H-%M-%S').pem"
-
-	sudo cat /etc/kubernetes/pki/apiserver-kubelet-client.crt /etc/kubernetes/pki/apiserver-kubelet-client.key \
-		> $newCertificateFile
-	sudo rm -f /var/lib/kubelet/pki/kubelet-client-current.pem
-	sudo ln -s $newCertificateFile /var/lib/kubelet/pki/kubelet-client-current.pem
-
-	# Force a restart of kubelet
-
-	echo "Restarting kublet service"
-
-	sudo systemctl restart kubelet
-
-	# Fix the config for kubectl
-
-	echo "Updating credentials for kubectl..."
-
-	mv -f ~/.kube/config ~/.kube/config.old
-	sudo cp /etc/kubernetes/admin.conf ~/.kube/config
-	sudo chown $(id -u):$(id -g) ~/.kube/config
-
-	# Get the join command to rejoin the nodes
-
-	joinCommand=$(kubeadm token create --print-join-command)
-
-	# Get the list of worker nodes
-
-	echo "Preparing to rejoin worker nodes to the cluster."
-	echo "There will be a delay of one-two minutes while kublets on each node is restarted"
-	echo "because of errors that may be ignored, so be patient!"
-	echo
-
-	readarray -t nodelist <<<"$(kubectl get nodes -o wide)"
-
-	for node in "${nodelist[@]}"; do
-
-		nodestripped=$(echo "$node" | tr -s ' ')
-		readarray -d ' ' -t nodeelements <<<"$nodestripped"
-
-		if [[ "${nodeelements[1]}" == 'NotReady' && "${nodeelements[2]}" == '<none>' ]]; then
-
-			ipaddress=${nodeelements[5]}
-
-			# Run the join command on each node
-
-			echo "Rejoining node ${nodeelements[0]} ($ipaddress) to the cluster;" \
-				"be prepared with the root password:"
-			echo "ssh root@${ipaddress} \"$joinCommand --ignore-preflight-errors=all\""
-
-			ssh root@${ipaddress} "$joinCommand --ignore-preflight-errors=all"
-		fi
-	done
-
-	echo
-	echo "Finished"
-
-else
+if [[ $(pgrep kube-apiserver) ]]; then
 
     #
+    # Kubernetes is running, we can do an in-place certificate renewal.
     # The hard part is figuring out which container runtime endpoint to use
-    # with the crictl command. <= 1.23, check the kublet command line for the
-    # --container-runtime-endpoint option. If it isn't there and and <= 1.23
-    # then it is the Docker shim. Otherwise, it is the CRI endpoint.
+    # with the crictl command. Kubernetes <= 1.23, check the kublet command
+    # line for the --container-runtime-endpoint option. If it isn't there
+    # and Kubernetes <= 1.23 then it is the Docker shim. Otherwise, it is
+    # the CRI endpoint.
     #
 
     echo "Determining runtime-endpoint"
@@ -278,4 +212,98 @@ else
 
     echo
     echo "Finished."
+
+else
+
+	# Kubernetes is not installed but not running, and this may be due to expiration of the client certificate
+    # for kublet. Get the expiration for the client certificate and see if that is the problem:
+
+	echo "Checking kublet certificate expiration..."
+
+	expiration=$(sudo openssl x509 -enddate -noout -in /var/lib/kubelet/pki/kubelet-client-current.pem \
+		| cut -c10- | date +%s -f -)
+
+	now=$(date +%s)
+
+	echo "certificate expiration timestamp: $expiration (now is $now)"
+
+	if (( $expiration >= $now )); then
+
+		echo "The kubelet client certificate has not expired, this is not a problem this script can fix!"
+		exit 1
+
+	fi
+
+	# Generate new self-signed certificates for kubernetes.
+
+	echo "The kubelet client certificate has expired"
+	echo "Generating new certificates..."
+	
+    sudo kubeadm certs renew all
+
+	# Update the client certificate for kubelet from the generated certificates.
+
+	echo "Fixing the kubelet client certificate..."
+
+	newCertificateFile="/var/lib/kubelet/pki/kubelet-client-$(date +'%y-%m-%d-%H-%M-%S').pem"
+
+	sudo cat /etc/kubernetes/pki/apiserver-kubelet-client.crt /etc/kubernetes/pki/apiserver-kubelet-client.key \
+		> $newCertificateFile
+	sudo rm -f /var/lib/kubelet/pki/kubelet-client-current.pem
+	sudo ln -s $newCertificateFile /var/lib/kubelet/pki/kubelet-client-current.pem
+
+	# Force a restart of kubelet.
+
+	echo "Restarting kublet service"
+
+	sudo systemctl restart kubelet
+
+	# Fix the user config to use kubectl.
+
+	echo "Updating credentials for kubectl..."
+
+	mv -f ~/.kube/config ~/.kube/config.old
+	sudo cp /etc/kubernetes/admin.conf ~/.kube/config
+	sudo chown $(id -u):$(id -g) ~/.kube/config
+
+	# Save the join command to rejoin the nodes.
+
+	joinCommand=$(kubeadm token create --print-join-command)
+
+	# Get the list of worker nodes.
+
+	echo "Preparing to rejoin worker nodes to the cluster."
+	echo "There will be a delay of one-two minutes while kublets on each node is restarted"
+	echo "because of errors that may be ignored, so be patient!"
+	echo
+
+	readarray -t nodelist <<<"$(kubectl get nodes -o wide)"
+
+	for node in "${nodelist[@]}"; do
+
+        # Break each node apart at the spaces, we only care about elements 1, 2, and 5
+        # so following element values that may have spaces are not an issue.
+
+		nodestripped=$(echo "$node" | tr -s ' ')
+		readarray -d ' ' -t nodeelements <<<"$nodestripped"
+
+		if [[ "${nodeelements[1]}" == 'NotReady' && "${nodeelements[2]}" == '<none>' ]]; then
+
+            # This is a worker node that has lost connection because of the certificates.
+
+			ipaddress=${nodeelements[5]}
+
+			# Run the join command on each node; running this on a node previously joined will
+            # hang for a minute or too. Be patient on each node.
+
+			echo "Rejoining node ${nodeelements[0]} ($ipaddress) to the cluster;" \
+				"be prepared with the root password:"
+			echo "ssh root@${ipaddress} \"$joinCommand --ignore-preflight-errors=all\""
+
+			ssh root@${ipaddress} "$joinCommand --ignore-preflight-errors=all"
+		fi
+	done
+
+	echo
+	echo "Finished"
 fi
