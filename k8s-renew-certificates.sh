@@ -263,48 +263,50 @@ else
 
     echo "Updating credentials for kubectl..."
 
-    mv -f ~/.kube/config ~/.kube/config.old
+    sudo mv -f ~/.kube/config ~/.kube/config.old
     sudo cp /etc/kubernetes/admin.conf ~/.kube/config
     sudo chown $(id -u):$(id -g) ~/.kube/config
-
-    # Save the join command to rejoin the nodes.
-
-    joinCommand=$(kubeadm token create --print-join-command)
-
-    # Get the list of worker nodes.
-
-    echo "Preparing to rejoin worker nodes to the cluster."
-    echo "There will be a delay of one-two minutes while kublets on each node is restarted"
-    echo "because of errors that may be ignored, so be patient!"
-    echo
-
-    readarray -t nodelist <<<"$(kubectl get nodes -o wide)"
-
-    for node in "${nodelist[@]}"; do
-
-        # Break each node apart at the spaces, we only care about elements 1, 2, and 5
-        # so following element values that may have spaces are not an issue.
-
-        nodestripped=$(echo "$node" | tr -s ' ')
-        readarray -d ' ' -t nodeelements <<<"$nodestripped"
-
-        if [[ "${nodeelements[1]}" == 'NotReady' && "${nodeelements[2]}" == '<none>' ]]; then
-
-            # This is a worker node that has lost connection because of the certificates.
-
-            ipaddress=${nodeelements[5]}
-
-            # Run the join command on each node; running this on a node previously joined will
-            # hang for a minute or too. Be patient on each node.
-
-            echo "Rejoining node ${nodeelements[0]} ($ipaddress) to the cluster;" \
-                "be prepared with the root password:"
-            echo "ssh root@${ipaddress} \"$joinCommand --ignore-preflight-errors=all\""
-
-            ssh root@${ipaddress} "$joinCommand --ignore-preflight-errors=all"
-        fi
-    done
-
-    echo
-    echo "Finished"
 fi
+
+# Save the join command to rejoin the nodes.
+
+joinCommand=$(kubeadm token create --print-join-command)
+
+# Get the list of worker nodes.
+
+echo "Preparing to rejoin missing worker nodes to the cluster."
+echo "There may be a delay of one-two minutes while kublets on each node is restarted"
+echo "because of errors that may be ignored, so be patient!"
+echo
+
+readarray -t nodelist <<<"$(kubectl get nodes -o wide)"
+
+for node in "${nodelist[@]}"; do
+
+    # Break each node apart at the spaces, we only care about elements 0, 1, 2, and 5
+    # so following element values that may have spaces are not an issue.
+
+    nodestripped=$(echo "$node" | tr -s ' ')
+    readarray -d ' ' -t nodeelements <<<"$nodestripped"
+
+    echo "Checking node ${nodelements[0]} (${nodeelements[5]}: ${nodelements[1]}"
+
+    if [[ "${nodeelements[1]}" == 'NotReady' && "${nodeelements[2]}" == '<none>' ]]; then
+
+        # This is a worker node that has lost connection because of the certificates.
+
+        ipaddress=${nodeelements[5]}
+
+        # Run the join command on each node; running this on a node previously joined will
+        # hang for a minute or too. Be patient on each node.
+
+        echo "Rejoining node ${nodeelements[0]} ($ipaddress) to the cluster;" \
+            "be prepared with the root password:"
+        echo "ssh root@${ipaddress} \"$joinCommand --ignore-preflight-errors=all\""
+
+        ssh root@${ipaddress} "$joinCommand --ignore-preflight-errors=all"
+    fi
+done
+
+echo
+echo "Finished"
