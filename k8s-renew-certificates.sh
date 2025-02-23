@@ -153,7 +153,7 @@ if [[ $(pgrep kube-apiserver) ]]; then
     #
 
     echo
-    echo "Restarting system containers; there may be socket errors as retries happen during restart:"
+    echo "Restarting system containers; there may be a delay and socket errors as retries happen waiting for the restart to complete:"
 
     containerIds=()
 
@@ -279,7 +279,7 @@ echo "There may be a delay of one-two minutes while kublets on each node is rest
 echo "because of errors that may be ignored, so be patient!"
 echo
 
-readarray -t nodelist <<<"$(kubectl get nodes -o wide)"
+readarray -t nodelist <<<"$(kubectl get nodes -o wide --no-headers)"
 
 for node in "${nodelist[@]}"; do
 
@@ -288,8 +288,7 @@ for node in "${nodelist[@]}"; do
 
     nodestripped=$(echo "$node" | tr -s ' ')
     readarray -d ' ' -t nodeelements <<<"$nodestripped"
-
-    echo "Checking node ${nodelements[0]} (${nodeelements[5]}: ${nodelements[1]}"
+    echo "Checking node ${nodeelements[0]}@(${nodeelements[5]} status: ${nodeelements[1]}"
 
     if [[ "${nodeelements[1]}" == 'NotReady' && "${nodeelements[2]}" == '<none>' ]]; then
 
