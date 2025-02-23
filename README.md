@@ -1,5 +1,5 @@
 [//]: # (README.md)
-[//]: # (Copyright © 2024 Joel A Mussman. All rights reserved.)
+[//]: # (Copyright © 2024-2025 Joel A Mussman. All rights reserved.)
 [//]: #
 
 ![Banner Light](https://raw.githubusercontent.com/jmussman/cdn-fun/main/banners/banner-k8s-renew-certificates-light.png#gh-light-mode-only)
@@ -99,4 +99,4 @@ The code is licensed under the MIT license. You may use and modify all or part o
 
 
 <hr>
-Copyright © 2024 Joel A Mussman. All rights reserved.
+Copyright © 2024-2025 Joel A Mussman. All rights reserved.

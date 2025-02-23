@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # renew-k8s-certs
-# Copyright (c) 2024 Joel A Mussman. All rights reserved.
+# Copyright (c) 2024-2025 Joel A Mussman. All rights reserved.
 #
 # This script is released under the MIT license (https://opensource.org/license/mit) and
 # may be copied, used, and altered as long as attribution is provided. This software is
