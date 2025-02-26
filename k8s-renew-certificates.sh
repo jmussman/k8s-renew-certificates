@@ -215,7 +215,7 @@ if [[ $(pgrep kube-apiserver) ]]; then
 
 else
 
-    # Kubernetes is not installed but not running, and this may be due to expiration of the client certificate
+    # Kubernetes is installed but not running, and this may be due to expiration of the client certificate
     # for kublet. Get the expiration for the client certificate and see if that is the problem:
 
     echo "Checking kublet certificate expiration (be prepared for the sudo)..."
