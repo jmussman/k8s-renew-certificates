@@ -9,7 +9,7 @@ containers=('kube-apiserver' 'kube-scheduler' 'kube-controller-manager' 'etcd')
 cri_endpoint=unix:///run/containerd/containerd.sock
 docker_shim_endpoint=unix:///var/run/dockershim.sock
 kubelet_pki_path=/var/lib/kubelet/pki
-kubelet_cert_path=$kublet_pki_path/kubelet-client-current.pem
+kubelet_cert_path=$kubelet_pki_path/kubelet-client-current.pem
 kubelet_option='container-runtime-endpoint'
 kubernetes_cert_path=/etc/kubernetes/pki/apiserver-kubelet-client.crt
 kubernetes_key_path=/etc/kubernetes/pki/apiserver-kubelet-client.key
@@ -23,7 +23,7 @@ function show_node_status() {
 function wait_for_restart() {
     echo "Restarting system containers; there may be a delay and socket errors as retries happen waiting for the restart to complete:"
     while [[ true ]]; do   
-        if [[ -z $(echo $(kubectl get pods --all-namespaces 2>&1) | grep "The connection to the server") ]]; then
+        if [[ -z $(echo $(kubectl get pods --all-namespaces 2>&1) | grep "The connection to the server") > /dev/null ]]; then
             break
         fi
         echo "Waiting another 15 seconds for API restart..."
@@ -94,7 +94,9 @@ function renew_unexpired_certificate() {
 }
 
 function rejoin_node() {
-    echo "Rejoining node $1 ($2) to the cluster; be prepared with the root password:"
+    echo "Rejoining node $1 ($2) to the cluster."
+    echo "Allow the ssh connection and provide the root password."
+    echo "There may be up to a two-minute delay rejoining; ignore any error 'uploading crisocket: Unauthorized'."
     cmd="if [[ \$(date -d \"\$(openssl x509 -enddate -noout -in $kubelet_cert_pem "
     cmd+="| cut -d = -f 2)\" +%s) -lt $(date +%s) ]]; then "
     cmd+="$(kubeadm token create --print-join-command) --ignore-preflight-errors=all; fi"
@@ -112,7 +114,7 @@ function match_worker_nodes() {
 }
 
 function rejoin_worker_nodes() {
-    nodes=$(match__worker_nodes $1)
+    nodes=$(match_worker_nodes $1)
     if [[ ! -z "$node" ]]; then 
         readarray -t node_list <<< "${nodes[@]}"
         for node in ${node_list[@]}; do
@@ -128,10 +130,10 @@ function restart_services() {
 
 function set_new_certificate() {
     new_cert_filename=kubelet-client-$(date +%Y-%m-%d-%H-%M-%S).pem
-    new_cert_path=$kubelet_pki_path/$new_cert_filename"
+    new_cert_path=$kubelet_pki_path/$new_cert_filename
     sudo cat $kubernetes_cert_path $kubernetes_key_path > /tmp/$new_cert_filename
     sudo mv /tmp/$new_cert_filename $new_cert_path
-    sudo rm -f $kublet_cert_path
+    sudo rm -f $kubelet_cert_path
     sudo ln -s $new_cert_path $kubelet_cert_path
 }
 
@@ -152,8 +154,9 @@ function renew_expired_certificate() {
     else
         renew_certificate
         set_new_certificate
-        restart_services
         refresh_user_credentials
+        restart_services
+        wait_for_restart
         rejoin_worker_nodes
     fi
 }
