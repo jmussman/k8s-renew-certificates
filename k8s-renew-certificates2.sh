@@ -23,7 +23,7 @@ function show_node_status() {
 function wait_for_restart() {
     echo "Restarting system containers; there may be a delay and socket errors as retries happen waiting for the restart to complete:"
     while [[ true ]]; do   
-        if [[ -z $(echo $(kubectl get pods --all-namespaces 2>&1) | grep "The connection to the server") > /dev/null ]]; then
+        if [[ -z $(echo $(kubectl get pods --all-namespaces 2>&1) | grep "The connection to the server") ]]; then
             break
         fi
         echo "Waiting another 15 seconds for API restart..."
@@ -107,7 +107,7 @@ function match_worker_nodes() {
     readarray -t node_list <<< "$(kubectl get nodes -o wide --no-headers)"
     for node in "${node_list[@]}"; do
         IFS=' ' read -r -a node_elements <<< "$node"
-        if [[ ${node_elements[2]}" == '<none>' ]]; then
+        if [[ "${node_elements[2]}" == '<none>' ]]; then
             echo ${node_elements[@]}
         fi
     done
@@ -142,7 +142,7 @@ function renew_certificate() {
 }
 
 function check_certificate_expiration() {
-    if [[ $(sudo openssl x509 -enddate -noout -in $kubeletCertificateFile | cut -c10- | date +%s -f -) -gt $(date +%s) ]]; then
+    if [[ $(sudo openssl x509 -enddate -noout -in $kubelet_cert_path | cut -c10- | date +%s -f -) -gt $(date +%s) ]]; then
         echo "The kubelet client certificate has not expired, this is not a problem this script can fix!"
     fi
 }
