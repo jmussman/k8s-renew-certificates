@@ -107,17 +107,17 @@ function match_worker_nodes() {
     readarray -t node_list <<< "$(kubectl get nodes -o wide --no-headers)"
     for node in "${node_list[@]}"; do
         IFS=' ' read -r -a node_elements <<< "$node"
-        if [[ "$node_elements" == "$1" && "${node_elements[2]}" == '<none>' ]]; then
+        if [[ ${node_elements[2]}" == '<none>' ]]; then
             echo ${node_elements[@]}
         fi
     done
 }
 
 function rejoin_worker_nodes() {
-    nodes=$(match_worker_nodes $1)
-    if [[ ! -z "$node" ]]; then 
+    nodes=$(match_worker_nodes)
+    if [[ ! -z "$nodes" ]]; then 
         readarray -t node_list <<< "${nodes[@]}"
-        for node in ${node_list[@]}; do
+        for node in "${node_list[@]"}; do
             IFS=' ' read -r -a node_elements <<< "$node"
             rejoin_node $node_elements ${node_elements[5]}
         done
