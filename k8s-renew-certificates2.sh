@@ -4,64 +4,20 @@
 # Copyright (c) 2024-2025 Joel A Mussman. All rights reserved.
 #
 
+admin_conf=/etc/kubernetes/admin.conf
 containers=('kube-apiserver' 'kube-scheduler' 'kube-controller-manager' 'etcd')
-criEndpoint=unix:///run/containerd/containerd.sock
-dockerShimEndpoint=unix:///var/run/dockershim.sock
-majorCutoff=1
-minorCutoff=23
+cri_endpoint=unix:///run/containerd/containerd.sock
+docker_shim_endpoint=unix:///var/run/dockershim.sock
+kubelet_pki_path=/var/lib/kubelet/pki
+kubelet_cert_path=$kublet_pki_path/kubelet-client-current.pem
+kubernetes_cert_path=/etc/kubernetes/pki/apiserver-kubelet-client.crt
+kubernetes_key_path=/etc/kubernetes/pki/apiserver-kubelet-client.key
+major_cutoff=1
+minor_cutoff=23
 option='--container-runtime-endpoint'
-kubletCertificateFile=/var/lib/kubelet/pki/kubelet-client-current.pem
 
 function show_node_status() {
     kubectl get nodes
-}
-
-function kubelet_endpoint_by_command() {
-    pgrep kubelet > /dev/null && ps --no-headers -fp $(pgrep kubelet) | grep "$option" | sed -e "s/^.*${option}=\([^ ]*\).*$/\1/g"
-}
-
-function kubelet_endpoint_by_version() {
-    kv=$(kubeadm version)
-    major=$(echo $kv | sed -e 's/^.*Major:"\([[:digit:]]*\).*$/\1/g')
-    minor=$(echo $kv | sed -e 's/^.*Minor:"\([[:digit:]]*\).*$/\1/g')
-    if (( $major > $majorCutoff || ($major == $majorCutoff && $minor > $minorCutoff ))); then
-        echo $criEndpoint
-    else
-        echo $dockerShimEndpoint
-    fi
-}
-
-function find_runtime_endpoint() {
-    endpoint=$(kubelet_endpoint_by_command)
-    if [[ -z $endpoint ]]; then
-        endpoint=$(kubelet_endpoint_by_version)
-    fi
-    echo $endpoint
-}
-
-function renew_certificates() {
-    sudo kubeadm certs renew all
-    sudo kubeadm certs check-expiration
-}
-
-function refresh_user_credentials() {
-    sudo cp /etc/kubernetes/admin.conf ~/.kube/config
-    sudo chown $(id -u):$(id -g) ~/.kube/config
-}
-
-function retrieve_system_container_ids() {
-    containerIds=()
-    for container in "$@"; do
-        containerIds=(${containerIds[@]} "$container:$(sudo crictl --runtime-endpoint $cre ps | grep $container | awk '{print $1}')") 
-    done
-    return containerIds
-}
-
-function stop_system_containers() {
-    echo "Stopping system containers"
-    for container in "$@"; do
-        sudo crictl --runtime-endpoint $cre stop ${container#*:} > /dev/null
-    done
 }
 
 function wait_for_restart() {
@@ -75,22 +31,110 @@ function wait_for_restart() {
     done
 }
 
+function stop_system_containers() {
+    cre=$1; shift
+    for container in "$@"; do
+        sudo crictl --runtime-endpoint $cre stop ${container#*:} > /dev/null
+    done
+}
+
+function retrieve_system_container_ids() {
+    container_ids=()
+    for container in "${containers[@]}"; do
+        container_ids=(${container_ids[@]} "$container:$(sudo crictl --runtime-endpoint $1 ps | grep $container | awk '{print $1}')") 
+    done
+    echo ${container_ids[@]}
+}
+
 function restart_kubernetes_system {
-    containerIds = retrieve_container_ids $@
-    stop_system_containers @containerIds
-    wait_for_restart()
+    IFS=' ' read -r -a container_ids <<< $(retrieve_container_ids) $1
+    stop_system_containers $1 ${container_ids[@]}
+    wait_for_restart
 }
 
-function renew_unexpired_certificate {
-
+function refresh_user_credentials() {
+    sudo cp $admin_conf ~/.kube/config
+    sudo chown $(id -u):$(id -g) ~/.kube/config
 }
 
-function renew_expired_certificate {
-
+function renew_certificates() {
+    sudo kubeadm certs renew all
+    sudo kubeadm certs check-expiration
 }
 
-function rejoin_worker_node {
+function kubelet_endpoint_by_version() {
+    kv=$(kubeadm version)
+    major=$(echo $kv | sed -e 's/^.*Major:"\([[:digit:]]*\).*$/\1/g')
+    minor=$(echo $kv | sed -e 's/^.*Minor:"\([[:digit:]]*\).*$/\1/g')
+    if (( $major > $majorCutoff || ($major == $majorCutoff && $minor > $minorCutoff ))); then
+        echo $criEndpoint
+    else
+        echo $docker_shim_endpoint
+    fi
+}
 
+function kubelet_endpoint_by_command() {
+    pgrep kubelet > /dev/null && ps --no-headers -fp $(pgrep kubelet) | grep "$option" | sed -e "s/^.*${option}=\([^ ]*\).*$/\1/g"
+}
+
+function find_runtime_endpoint() {
+    endpoint=$(kubelet_endpoint_by_command)
+    if [[ -z $endpoint ]]; then
+        endpoint=$(kubelet_endpoint_by_version)
+    fi
+    echo $endpoint
+}
+
+function renew_unexpired_certificate() {
+    cre=$(find_runtime_endpoint)
+    renew_certificates
+    refresh_user_credentials
+    restart_kubernetes_system $cre
+    show_node_status
+}
+
+function rejoin_node() {
+    echo "Rejoining node $1 ($2) to the cluster; be prepared with the root password:"
+    cmd="if [[ \$(date -d \"\$(openssl x509 -enddate -noout -in $kubelet_cert_pem "
+    cmd+="| cut -d = -f 2)\" +%s) -lt $(date +%s) ]]; then "
+    cmd+="$(kubeadm token create --print-join-command) --ignore-preflight-errors=all; fi"
+    ssh root@$2 "$cmd"
+}
+
+function match_worker_nodes() {
+    readarray -t node_list <<< "$(kubectl get nodes -o wide --no-headers)"
+    for node in "${node_list[@]}"; do
+        IFS=' ' read -r -a node_elements <<< "$node"
+        if [[ "$node_elements" == "$1" && "${node_elements[2]}" == '<none>' ]]; then
+            echo ${node_elements[@]}
+        fi
+    done
+}
+
+function rejoin_worker_nodes() {
+    nodes=$(match__worker_nodes $1)
+    if [[ ! -z "$node" ]]; then 
+        readarray -t node_list <<< "${nodes[@]}"
+        for node in ${node_list[@]}; do
+            IFS=' ' read -r -a node_elements <<< "$node"
+            rejoin_node $node_elements ${node_elements[5]}
+        done
+    fi
+}
+
+function restart_services() {
+    sudo systemctl restart kubelet
+}
+
+function set_new_certificate() {
+    new_certificate_path="$kubelet_pki_path/kubelet-client-$(date +%Y-%m-%d-%H-%M-%S).pem"
+    sudo cat $kubernetes_cert_path $kubernetes_key_path > $new_cert_path
+    sudo rm -f $kublet_cert_path
+    sudo ln -s $new_cert_path $kubelet_cert_path
+}
+
+function renew_certificate() {
+    sudo kubeadm certs renew all
 }
 
 function check_certificate_expiration() {
@@ -99,73 +143,34 @@ function check_certificate_expiration() {
     fi
 }
 
-# Is Kubernetes installed?
-
-if [[ -z $(which crictl) || -z $(which kubeadm) || -z $(which kubectl) ]]; then
-
-	echo "Commands are missing, Kubernetes does not appear to be installed."
-
-	exit 1
-fi
-
-if [[ $(pgrep kube-apiserver) ]]; then
-
-    renew_unexpired_certificate containers
-    find_runtime_endpoint
-    renew_certificates
-    refresh_user_credentials
-    restart_kubernetes_system
-    show_node_status
-
-else
-
+function renew_expired_certificate() {
     msg=$(check_certificate_expiration)
-    if [[ -z $msg ]]; then
-        sudo kubeadm certs renew all
-        newCertificateDate="$(date +'%Y-%m-%d-%H-%M-%S').pem"
-        newCertificateFile="/var/lib/kubelet/pki/kubelet-client-${newCertificateDate}"
-        sudo cat /etc/kubernetes/pki/apiserver-kubelet-client.crt /etc/kubernetes/pki/apiserver-kubelet-client.key > "/tmp/${newCertificateDate}"
-        sudo mv "/tmp/${newCertificateDate}" "${newCertificateFile}"
-        sudo rm -f /var/lib/kubelet/pki/kubelet-client-current.pem
-        sudo ln -s $newCertificateFile /var/lib/kubelet/pki/kubelet-client-current.pem
-
-        sudo systemctl restart kubelet
-
+    if [[ ! -z "$msg" ]]; then
+        echo $msg
+    else
+        renew_certificate
+        set_new_certificate
+        restart_services
         refresh_user_credentials
+        rejoin_worker_nodes
     fi
-fi
+}
 
-# Save the join command to rejoin the nodes.
-
-joinCommand=$(kubeadm token create --print-join-command)
-
-readarray -t nodelist <<<"$(kubectl get nodes -o wide --no-headers)"
-
-for node in "${nodelist[@]}"; do
-
-    # Break each node apart at the spaces, we only care about elements 0, 1, 2, and 5
-    # so following element values that may have spaces are not an issue.
-
-    nodestripped=$(echo "$node" | tr -s ' ')
-    readarray -d ' ' -t nodeelements <<<"$nodestripped"
-    echo "Checking node ${nodeelements[0]}@(${nodeelements[5]} status: ${nodeelements[1]}"
-
-    if [[ "${nodeelements[1]}" == 'NotReady' && "${nodeelements[2]}" == '<none>' ]]; then
-
-        # This is a worker node that has lost connection because of the certificates.
-
-        ipaddress=${nodeelements[5]}
-
-        # Run the join command on each node; running this on a node previously joined will
-        # hang for a minute or too. Be patient on each node.
-
-        echo "Rejoining node ${nodeelements[0]} ($ipaddress) to the cluster;" \
-            "be prepared with the root password:"
-        echo "ssh root@${ipaddress} \"$joinCommand --ignore-preflight-errors=all\""
-
-        ssh root@${ipaddress} "$joinCommand --ignore-preflight-errors=all"
+function check_installation() {
+    if [[ -z $(which crictl) || -z $(which kubeadm) || -z $(which kubectl) ]]; then
+    	echo "Run this script on the control plane - Kubernetes does not appear to be installed on this computer."
     fi
-done
+}
 
-echo
-echo "Finished"
+function main() {
+    msg=${check_installation}
+    if [[ ! -z msg ]]; then
+        echo $msg
+    elif [[ $(pgrep kube-apiserver) ]]; then
+        renew_unexpired_certificate containers
+    else
+        renew_expired_certificate
+    fi
+}
+
+main
