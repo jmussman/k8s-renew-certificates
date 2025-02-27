@@ -10,11 +10,11 @@ cri_endpoint=unix:///run/containerd/containerd.sock
 docker_shim_endpoint=unix:///var/run/dockershim.sock
 kubelet_pki_path=/var/lib/kubelet/pki
 kubelet_cert_path=$kublet_pki_path/kubelet-client-current.pem
+kubelet_option='container-runtime-endpoint'
 kubernetes_cert_path=/etc/kubernetes/pki/apiserver-kubelet-client.crt
 kubernetes_key_path=/etc/kubernetes/pki/apiserver-kubelet-client.key
 major_cutoff=1
 minor_cutoff=23
-option='--container-runtime-endpoint'
 
 function show_node_status() {
     kubectl get nodes
@@ -74,7 +74,7 @@ function kubelet_endpoint_by_version() {
 }
 
 function kubelet_endpoint_by_command() {
-    pgrep kubelet > /dev/null && ps --no-headers -fp $(pgrep kubelet) | grep "$option" | sed -e "s/^.*${option}=\([^ ]*\).*$/\1/g"
+    pgrep kubelet > /dev/null && ps --no-headers -fp $(pgrep kubelet) | grep "$kubelet_option" | sed -e "s/^.*${option}=\([^ ]*\).*$/\1/g"
 }
 
 function find_runtime_endpoint() {
@@ -127,8 +127,10 @@ function restart_services() {
 }
 
 function set_new_certificate() {
-    new_certificate_path="$kubelet_pki_path/kubelet-client-$(date +%Y-%m-%d-%H-%M-%S).pem"
-    sudo cat $kubernetes_cert_path $kubernetes_key_path > $new_cert_path
+    new_cert_filename=kubelet-client-$(date +%Y-%m-%d-%H-%M-%S).pem
+    new_cert_path=$kubelet_pki_path/$new_cert_filename"
+    sudo cat $kubernetes_cert_path $kubernetes_key_path > /tmp/$new_cert_filename
+    sudo mv /tmp/$new_cert_filename $new_cert_path
     sudo rm -f $kublet_cert_path
     sudo ln -s $new_cert_path $kubelet_cert_path
 }
@@ -164,7 +166,7 @@ function check_installation() {
 
 function main() {
     msg=${check_installation}
-    if [[ ! -z msg ]]; then
+    if [[ ! -z "$msg" ]]; then
         echo $msg
     elif [[ $(pgrep kube-apiserver) ]]; then
         renew_unexpired_certificate containers
