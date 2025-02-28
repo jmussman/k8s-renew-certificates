@@ -16,12 +16,7 @@ kubernetes_key_path=/etc/kubernetes/pki/apiserver-kubelet-client.key
 major_cutoff=1
 minor_cutoff=23
 
-function show_node_status() {
-    kubectl get nodes
-}
-
 function wait_for_restart() {
-    echo "Restarting system containers; there may be a delay and socket errors as retries happen waiting for the restart to complete:"
     while [[ true ]]; do   
         if [[ -z $(echo $(kubectl get nodes 2>&1) | grep "The connection to the server") ]]; then
             break
@@ -31,7 +26,6 @@ function wait_for_restart() {
 }
 
 function wait_for_broken_nodes() {
-    echo "Waiting up to three minutes to see if there are any worker nodes that do not connect:"
     for counter in $(seq 12); do   
         if [[ ! -z $(echo $(kubectl get nodes 2>&1) | grep "NotReady") ]]; then
             return 1
@@ -96,17 +90,21 @@ function find_runtime_endpoint() {
 
 function renew_unexpired_certificate() {
     cre=$(find_runtime_endpoint)
+    echo "Generating new certificates."
     renew_certificates
+    echo "Refreshing API credentials for the current user."
     refresh_user_credentials
+    echo "Restarting Kubernetes system containers."
     restart_kubernetes_system $cre
+    echo "Restarting system containers; there may be a short delay before they come online."
     wait_for_restart
 }
 
 function rejoin_node() {
     echo "Rejoining node $1 ($2) to the cluster."
-    echo "Allow the ssh connection and provide the root password."
-    echo "There may be up to a two-minute delay rejoining; ignore any error 'uploading crisocket: Unauthorized'."
-    cmd="if [[ \$(date -d \"\$(openssl x509 -enddate -noout -in $kubelet_cert_pem "
+    echo "Accept the ssh key fingerprint and provide the root password."
+    echo "There may be up to a two-minute delay rejoining; ignore any warnings and '...uploading crisocket: Unauthorized'."
+    cmd="if [[ \$(date -d \"\$(openssl x509 -enddate -noout -in $kubelet_cert_path "
     cmd+="| cut -d = -f 2)\" +%s) -lt $(date +%s) ]]; then "
     cmd+="$(kubeadm token create --print-join-command) --ignore-preflight-errors=all > /dev/null; fi"
     ssh root@$2 "$cmd"
@@ -158,11 +156,17 @@ function renew_expired_certificate() {
     if [[ ! -z "$msg" ]]; then
         echo $msg
     else
+        echo "Generating new certificates."
         renew_certificates
+        echo "Setting new kubelet certificate."
         set_new_certificate
+        echo "Refreshing API credentials for the current user."
         refresh_user_credentials
+        echo "Restarting kubelet service."
         restart_services
+        echo "Restarting system containers; there may be a short delay before they come online."
         wait_for_restart
+        echo "Polling up to three minutes to see if there are any worker nodes that do not connect."
         if ! wait_for_broken_nodes; then rejoin_worker_nodes; fi
     fi
 }
