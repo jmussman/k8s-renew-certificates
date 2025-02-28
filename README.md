@@ -100,3 +100,7 @@ The code is licensed under the MIT license. You may use and modify all or part o
 
 <hr>
 Copyright © 2024-2025 Joel A Mussman. All rights reserved.
+
+
+https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/troubleshooting-kubeadm/#kubelet-client-cert
+https://github.com/kubernetes-sigs/kind/issues/3492
