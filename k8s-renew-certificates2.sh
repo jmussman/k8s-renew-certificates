@@ -168,7 +168,7 @@ function renew_expired_certificate() {
         refresh_user_credentials
         restart_services
         wait_for_restart
-        if [[ ! $(wait_for_broken_nodes) ]]; then rejoin_worker_nodes; fi
+        if ! wait_for_broken_nodes; then rejoin_worker_nodes; fi
     fi
 }
 
