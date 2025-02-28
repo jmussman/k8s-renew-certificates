@@ -23,12 +23,23 @@ function show_node_status() {
 function wait_for_restart() {
     echo "Restarting system containers; there may be a delay and socket errors as retries happen waiting for the restart to complete:"
     while [[ true ]]; do   
-        if [[ -z $(echo $(kubectl get pods --all-namespaces 2>&1) | grep "The connection to the server") ]]; then
+        if [[ -z $(echo $(kubectl get nodes --all-namespaces 2>&1) | grep "The connection to the server") ]]; then
             break
         fi
         echo "Waiting another 15 seconds for API restart..."
         sleep 15
     done
+}
+
+function wait_for_broken_nodes() {
+    echo "Waiting up to three minutes to see if there are any worker nodes that do not connect:"
+    for counter in $(seq 12); do   
+        if [[ ! -z $(echo $(kubectl get nodes --all-namespaces 2>&1) | grep "NotReady") ]]; then
+            return 1
+        fi
+        sleep 15
+    done
+    return 0
 }
 
 function stop_system_containers() {
@@ -117,7 +128,7 @@ function rejoin_worker_nodes() {
     nodes=$(match_worker_nodes)
     if [[ ! -z "$nodes" ]]; then 
         readarray -t node_list <<< "${nodes[@]}"
-        for node in "${node_list[@]"}; do
+        for node in "${node_list[@]}"; do
             IFS=' ' read -r -a node_elements <<< "$node"
             rejoin_node $node_elements ${node_elements[5]}
         done
@@ -157,7 +168,7 @@ function renew_expired_certificate() {
         refresh_user_credentials
         restart_services
         wait_for_restart
-        rejoin_worker_nodes
+        if [[ ! $(wait_for_broken_nodes) ]]; then rejoin_worker_nodes; fi
     fi
 }
 
