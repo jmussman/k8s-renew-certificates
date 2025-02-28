@@ -153,6 +153,7 @@ function renew_certificate() {
 }
 
 function check_certificate_expiration() {
+    echo "Checking Kubernetes certificate status, enter the password for sudo:"
     if [[ $(sudo openssl x509 -enddate -noout -in $kubelet_cert_path | cut -c10- | date +%s -f -) -gt $(date +%s) ]]; then
         echo "The kubelet client certificate has not expired, this is not a problem this script can fix!"
     fi
