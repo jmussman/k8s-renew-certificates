@@ -23,7 +23,7 @@ function show_node_status() {
 function wait_for_restart() {
     echo "Restarting system containers; there may be a delay and socket errors as retries happen waiting for the restart to complete:"
     while [[ true ]]; do   
-        if [[ -z $(echo $(kubectl get nodes --all-namespaces 2>&1) | grep "The connection to the server") ]]; then
+        if [[ -z $(echo $(kubectl get nodes 2>&1) | grep "The connection to the server") ]]; then
             break
         fi
         echo "Waiting another 15 seconds for API restart..."
@@ -34,7 +34,7 @@ function wait_for_restart() {
 function wait_for_broken_nodes() {
     echo "Waiting up to three minutes to see if there are any worker nodes that do not connect:"
     for counter in $(seq 12); do   
-        if [[ ! -z $(echo $(kubectl get nodes --all-namespaces 2>&1) | grep "NotReady") ]]; then
+        if [[ ! -z $(echo $(kubectl get nodes 2>&1) | grep "NotReady") ]]; then
             return 1
         fi
         sleep 15
@@ -69,7 +69,7 @@ function refresh_user_credentials() {
 }
 
 function renew_certificates() {
-    sudo kubeadm certs renew all
+    sudo kubeadm certs renew all > /dev/null
     sudo kubeadm certs check-expiration
 }
 
