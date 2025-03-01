@@ -20,7 +20,7 @@ kubernetes_key_path=/etc/kubernetes/pki/apiserver-kubelet-client.key
 
 function wait_for_container_restart {
     while [[ true ]]; do   
-        if [[ -z $(echo $(kubectl get pods -n kube-system 2>&1) | grep "Pending\|Failed\|Unknown") ]]; then
+        if [[ -z $(echo $(kubectl get pods -n kube-system 2>&1) | grep "The connection to the server") ]]; then
             break
         fi
         sleep 15
@@ -49,7 +49,7 @@ function stop_system_containers_via_crictl {
 function retrieve_system_container_ids_via_crictl {
     container_ids=()
     for container in "${containers[@]}"; do
-        container_ids=(${container_ids[@]} "$container:$(sudo crictl --runtime-endpoint $1 ps | grep k8s_$container | awk '{print $1}')") 
+        container_ids=(${container_ids[@]} "$container:$(sudo crictl --runtime-endpoint $1 ps | grep $container | awk '{print $1}')") 
     done
     echo ${container_ids[@]}
 }
@@ -75,7 +75,7 @@ function stop_system_containers_via_docker {
 function retrieve_system_container_ids_via_docker {
     container_ids=()
     for container in "${containers[@]}"; do
-        container_ids=(${container_ids[@]} "$container:$(sudo docker ps | grep $container | awk '{print $1}')") 
+        container_ids=(${container_ids[@]} "$container:$(sudo docker ps | grep k8s_$container | awk '{print $1}')") 
     done
     echo ${container_ids[@]}
 }
