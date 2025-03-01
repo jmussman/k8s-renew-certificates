@@ -9,54 +9,89 @@
 
 ## Overview
 
-The self-signed certificates that Kubernetes uses to authenticate nodes and the admin user expire in one year.
-Instructions for renewing the certificates obscure, but the process is actually simple.
-Renewing the certificates in a running requires restarting core system containers, which means
-the cluster will be unavailable temporarily (usually less than 60 seconds).
+Go to the section on [Utilization](#utilization) for how to use the scripts.
 
-An edge-case that has presented itself in classroom environments
-is where lab computers with an old, frozen image
-has certificates which have passed their expiration when the computers are started.
-In this case, Kubernetes will not start.
+Kubernetes uses self-signed certificates for cluster-internal authentication and communication.
+It is its own certificate authority, so it accepts the certificates that it signed for
+the *kubelet* service running on the nodes, and users calling the API through *kubectl*.
+There are plenty of third-party certificate management solutions that may be overlayed on
+Kubernetes, but what if you are not using that?
+The CA certificate that Kubernetes creates will expire ten years after the installation,
+renewing it addressed here: [https://kubernetes.io/docs/tasks/tls/manual-rotation-of-ca-certificates/](https://kubernetes.io/docs/tasks/tls/manual-rotation-of-ca-certificates/).
+
+When a *kubelet* service is joined to the cluster the administrator is vouching for it,
+and it gets a certificate to use for authenticating with the control plane.
+These certificates expire on one year.
+To handle this, the kubelet service, which is already talking to the control plane,
+should configured to get a new certificate from the CP before it expires:
+[https://kubernetes.io/docs/tasks/tls/certificate-rotation/](https://kubernetes.io/docs/tasks/tls/certificate-rotation/).
+
+If the kubelet certificate expires the node will become "NotReady".
+There are several articles that address forcing a renewal including this note in the Kubernetes
+documentation: [https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/troubleshooting-kubeadm/#kubelet-client-cert](https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/troubleshooting-kubeadm/#kubelet-client-cert).
+But, it is easier just to rejoin the node to the cluster which will force a new certificate.
+The [*k8s-rejoin-node.sh*](#k8s-rejoin-nodesh) script in this project will force a rejoin of a node with an expired certificate.
+
+Managing the certificates used by the control plane is well documented:
+[https://kubernetes.io/docs/reference/setup-tools/kubeadm/kubeadm-certs/](https://kubernetes.io/docs/reference/setup-tools/kubeadm/kubeadm-certs/).
+If you are in a scenarion where Kubernetes will not start the control plane because the certificates
+has expired, renewing them will allow the CP to be started.
 Here is an example taken from /var/log/syslog on an Ubuntu server
-indicating the problem with the certificates (scroll horizontally):
+showing the problem with the certificates (it scrolls horizontally):
 ```
 Dec  3 10:01:21 master kubelet[11127]: E1203 10:01:21.970450   11127 bootstrap.go:265] part of the existing bootstrap client certificate in /etc/kubernetes/kubelet.conf is expired: 2024-06-11 17:17:20 +0000 UTC
 ```
-Letting the certificates expire should never be allowed to happen in a production environment.
-This problem is a little more complex to solve.
-There are two parts to this script, one updates existing certificates that have not expired
-and the other detects that
-Kubernetes is not running because of an expired certificate and fixes that.
+
+*kubeadm certs renew* will update the certificates, and tell you that you need to restart four containers in
+the *kube-system* namespace: *kube-apiserver*, *kube-scheduler*, *kube-controller-manager*, *etcd*.
+If you are using the */etc/kubernetes/admin.conf* file as the credentials for a "super-admin" user you
+will need to refresh their credentials in their ~/.kube/config file because admin.conf has been updated.
+
+Our [*k8s-renew-certificates*](#k8s-renew-certificates) script will take care of all of this regardless of
+whether Kubernetes starts or not.
 
 ## Utilization
 
+### k8s-rejoin-node.sh
+
+This script will use ssh to initiate a rejoin operation on a node,
+one step of the operation performed by the renewal script.
+This will only work if the node is NotReady and the Kubelet certificate has expired.
+Download the script (you can do it directly with curl)
+and execute it with bash as a non-root user with the Kubernetes node name.
+You will need the root password for the node.
+```
+curl --remote-name https://raw.githubusercontent.com/jmussman/k8s-renew-certificates/refs/heads/main/k8s-rejoin-node.sh
+```
+```
+bash k8s-rejoin-node.sh <node name>
+```
+
 ### k8s-renew-certificates
 
-Use this script on a running cluster to renew the certificates and push them out to the nodes.
+This script handles three situations:
 
-1. Copy the *8s-renew-certificates.sh* file to the Kubernetes control plane node.
-1. Change the permissions on the script to execute it:
-    ```
-    $ chmod +x k8s-renew-certificates.sh
-    ```
-1. Execute the script as a regular user.
-The script will exit if the certificates have not expired, use --force to force a rotation:
-    ```
-    $ k8s-renew-certificates.sh --force
+* Renew the certificates in a stable Kubernetes control plane (use -f or --force)
+* Renew the certificates in a running Kubernetes CP where they have expired
+* Renew the certificate and start a stopped Kuberenetes CP with expired certificates
 
-The script will automatically detect if the first mode (renew current certificates) or the
-second mode (fix expired certificates) needs to be performed.
-
-Any commands requiring elevated privileges will run with sudo.
-The user running the script must have permissions to sudo to root,
-be prepared to enter the user password.
-
-In the second mode if worker nodes have expired certificates they will need to be re-joined
-to the cluster.
-In this case the root password for the worker node computer is required.
+Download the script and run it with bash as a non-root user that has super-admin
+access to the cluster (the /etc/kubernetes/admin.conf file was copied to ~/.kube/config).
+Add -f or --force if this is a stable Kubernetes CP with unexpired certificates.
+```
+curl --remote-name https://raw.githubusercontent.com/jmussman/k8s-renew-certificates/refs/heads/main/k8s-renew-certificates.sh
+```
+```
+bash k8s-renew-certificates.sh
+```
 
 ## Script Internals
+
+### k8s-rejoin-node
+
+This script executes a *kubeadm token create --print-join-command* to get the join command.
+Then it executes a command remotely on the node using ssh to run that join command,
+but only if the certificate for the kubelet has expired.
 
 ### Mode 1 - Renew current certificates
 
@@ -65,9 +100,10 @@ the script will use *Docker* or *crictl* to restart the core system containers.
 The choice depends on what the cluster is using for the containers.
 
 *crictl* requires a runtime-endpoint to be specified.
-Providing a default has been deprecated in later versions of Kubernetes, it should be found
-in the /etc/kubernetes/kubelet.conf file where it will be read by the script.
-Otherwise it must be entered manually into the script.
+Providing a default has been deprecated in later versions of Kubernetes, the path should be found
+as the *containerRuntimeEndpoint* attribute in the /etc/kubernetes/kubelet.conf file
+where it will be read automatically by the script.
+If the path is not there it must be entered manually into the script.
 
 In this mode the script executes these steps:
 
@@ -82,7 +118,8 @@ There is no requirement to touch the other nodes in the cluster, unless you are 
 to use *kubectl* against the API (a really bad idea), in which case the user credentials need
 to be reset.
 The new certificates will propogate automatically to the nodes.
-Worker nodes should rotate their own certificates as long as they are up.
+Worker nodes should rotate their own certificates as long as they are up
+and configured to do so.
 
 ### Mode 2 - Fix expired certificates
 
@@ -100,31 +137,14 @@ The script executes these steps:
 1. Refresh the user credentials: copy the new /etc/kubernetes/admin.conf file to ~/.kube/config.
 1. Identify the worker nodes and use an ssh command to rejoin each one.
 
-### k8s-rejoin-node.sh
-
-This script will use ssh to initiate a rejoin operation on a node,
-one step of the operation performed by the renewal script.
-This will only work if the node is NotReady and the Kubelet certificate has expired.
-
-```
-$ k8s-rejoin-node.sh <node name>
-```
-
 #### Notes:
 
-After restarting the server, the worker nodes will appear to be Ready even if the certificates
-have expired.
-THe script builds in a wait of up to three minutes to see if the status changes to NotReady and
+After restarting the server if you run *kubectl get nodes* the worker nodes will appear
+to be *Ready* even if the certificates have expired; this state usually lasts about
+sixty seconds and then they go to *NotReady* because they cannot connect.
+
+THe script builds in a wait of up to three minutes to see if any nodes change to *NotReady* and
 then launches the ssh commands to make them rejoin the cluster.
-
-It should be possible to fix the certificates in the worker nodes without forcing a rejoin, according to these blog and doc pages:
-
-* https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/troubleshooting-kubeadm/#kubelet-client-cert
-* https://github.com/kubernetes-sigs/kind/issues/3492
-
-Unfortunately it seems really difficult to get this to work, re-joining seems to be the simpler
-option/
-
 
 ## Credits
 
