@@ -31,6 +31,8 @@ Kubernetes is not running because of an expired certificate and fixes that.
 
 ## Utilization
 
+### k8s-renew-certificates
+
 Use this script on a running cluster to renew the certificates and push them out to the nodes.
 
 1. Copy the *8s-renew-certificates.sh* file to the Kubernetes control plane node.
@@ -97,6 +99,16 @@ The script executes these steps:
 1. Start Kubernetes.
 1. Refresh the user credentials: copy the new /etc/kubernetes/admin.conf file to ~/.kube/config.
 1. Identify the worker nodes and use an ssh command to rejoin each one.
+
+### k8s-rejoin-node.sh
+
+This script will use ssh to initiate a rejoin operation on a node,
+one step of the operation performed by the renewal script.
+This will only work if the node is NotReady and the Kubelet certificate has expired.
+
+```
+$ k8s-rejoin-node.sh <node name>
+```
 
 #### Notes:
 
