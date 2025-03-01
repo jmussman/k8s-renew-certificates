@@ -49,7 +49,7 @@ function stop_system_containers_via_crictl {
 function retrieve_system_container_ids_via_crictl {
     container_ids=()
     for container in "${containers[@]}"; do
-        container_ids=(${container_ids[@]} "$container:$(sudo crictl --runtime-endpoint $1 ps | grep $container | awk '{print $1}')") 
+        container_ids=(${container_ids[@]} "$container:$(sudo crictl --runtime-endpoint $1 ps | grep k8s_$container | awk '{print $1}')") 
     done
     echo ${container_ids[@]}
 }
