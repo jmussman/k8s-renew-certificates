@@ -4,10 +4,13 @@
 # Copyright (c) 2024-2025 Joel A Mussman. All rights reserved.
 #
 
-cri_endpoint=unix:///run/containerd/containerd.sock     # This changes depending on the container engine used.
+# This changes depending on the container engine used. If set in the kublet configuration
+# as "containerRuntimeEndpoint" it will be retrieved automatically, otherwise it must be
+# configured manually.
+cri_endpoint=unix:///run/containerd/containerd.sock     
 
-admin_conf=/etc/kubernetes/admin.conf
 containers=('kube-apiserver' 'kube-scheduler' 'kube-controller-manager' 'etcd')
+kubelet_conf=/etc/kubernetes/kubelet.conf
 kubelet_pki_path=/var/lib/kubelet/pki
 kubelet_cert_path=$kubelet_pki_path/kubelet-client-current.pem
 kubelet_option='container-runtime-endpoint'
@@ -36,7 +39,9 @@ function wait_for_broken_nodes {
 function stop_system_containers_via_crictl {
     cre=$1; shift
     for container in "$@"; do
-        sudo crictl -r $cre stop "${container}" > /dev/null
+        IFS=":" read -r -a keyvalue <<< $container
+        echo "Stopping container ${keyvalue[0]}..."
+        sudo crictl -r $cre stop "${keyvalue[1]}" > /dev/null
     done
 }
 
@@ -48,9 +53,21 @@ function retrieve_system_container_ids_via_crictl {
     echo ${container_ids[@]}
 }
 
+function find_runtime_endpoint {
+    $config=$(grep containerRuntimeEndpoint $kubelet_conf)
+    if [[ ! -z $config ]]; then
+        $cre=$(echo $config | (awk '{print $2}' | sed 's/"//g')
+    else
+        $cre=$cri_endpoint
+    fi
+    echo $cre
+}
+
 function stop_system_containers_via_docker {
     for container in "$@"; do
-        sudo docker stop ${container} > /dev/null
+        IFS=":" read -r -a keyvalue <<< $container
+        echo "Stopping container ${keyvalue[0]}..."
+        sudo docker stop ${keyvalue[1]} > /dev/null
     done
 }
 
@@ -65,11 +82,11 @@ function retrieve_system_container_ids_via_docker {
 function restart_kubernetes_system {
     if [[ ! -z $(which docker) && ! -z $(sudo docker ps | grep 'k8s_') ]]; then
         IFS=' ' read -r -a container_ids <<< $(retrieve_system_container_ids_via_docker)
-        stop_system_containers_via_docker $1 ${container_ids[@]} 2>&1 > /dev/null
+        stop_system_containers_via_docker $1 ${container_ids[@]}
     else
         cre=$(find_runtime_endpoint)
-        IFS=' ' read -r -a container_ids <<< $(retrieve_system_container_ids_via_crictl) $cri_endpoint
-        stop_system_containers_via_crictl $1 ${container_ids[@]} 2>&1 > /dev/null
+        IFS=' ' read -r -a container_ids <<< $(retrieve_system_container_ids_via_crictl) $cre
+        stop_system_containers_via_crictl $1 ${container_ids[@]}
     fi
 }
 
@@ -84,20 +101,21 @@ function renew_certificates {
 }
 
 function renew_unexpired_certificate {
-    echo "Generating new certificates."
+    echo "Generating new certificates..."
     renew_certificates
-    echo "Refreshing API credentials for the current user."
+    echo "Refreshing API credentials for the current user..."
     refresh_user_credentials
-    echo "Restarting Kubernetes system containers."
+    echo "Restarting Kubernetes system containers..."
     restart_kubernetes_system $cre
-    echo "Restarting system containers; there may be a short delay before they come online."
+    echo "There will be a significant delay before the containers come online, be patient..."
     wait_for_container_restart
+    echo "Finished."
 }
 
 function rejoin_node {
     echo "Rejoining node $1 ($2) to the cluster."
     echo "Accept the ssh key fingerprint and provide the root password."
-    echo "There may be up to a two-minute delay rejoining; ignore any warnings and '...uploading crisocket: Unauthorized'."
+    echo "There may be up to a two-minute delay rejoining; ignore any warnings and '...uploading crisocket: Unauthorized'..."
     cmd="if [[ \$(date -d \"\$(openssl x509 -enddate -noout -in $kubelet_cert_path "
     cmd+="| cut -d = -f 2)\" +%s) -lt $(date +%s) ]]; then "
     cmd+="$(kubeadm token create --print-join-command) --ignore-preflight-errors=all > /dev/null; fi"
@@ -154,24 +172,18 @@ function check_certificate_expiration {
 }
 
 function renew_expired_certificate {
-    echo "Checking Kubernetes certificate status, enter the password for sudo if prompted:"
-    msg=$(check_certificate_expiration)
-    if [[ ! -z "$msg" ]]; then
-        echo $msg
-    else
-        echo "Generating new certificates..."
-        renew_certificates
-        echo "Setting new kubelet certificate..."
-        set_new_certificate
-        echo "Refreshing API credentials for the current user..."
-        refresh_user_credentials
-        echo "Restarting kubelet service..."
-        restart_services
-        echo "Restarting kubelet; there may be a short delay before it comes online..."
-        wait_for_kubelet_restart
-        echo "Polling up to three minutes to see if there are any worker nodes that do not connect..."
-        if ! wait_for_broken_nodes; then rejoin_worker_nodes; fi
-    fi
+    echo "Generating new certificates..."
+    renew_certificates
+    echo "Setting new kubelet certificate..."
+    set_new_certificate
+    echo "Refreshing API credentials for the current user..."
+    refresh_user_credentials
+    echo "Restarting kubelet service..."
+    restart_services
+    echo "Restarting kubelet; there may be a short delay before it comes online..."
+    wait_for_kubelet_restart
+    echo "Polling up to three minutes to see if there are any worker nodes that do not connect..."
+    if ! wait_for_broken_nodes; then rejoin_worker_nodes; fi
 }
 
 function check_installation {
