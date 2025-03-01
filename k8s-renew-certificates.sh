@@ -9,6 +9,7 @@
 # configured manually.
 cri_endpoint=unix:///run/containerd/containerd.sock     
 
+admin_conf=/etc/kubernetes/admin.conf
 containers=('kube-apiserver' 'kube-scheduler' 'kube-controller-manager' 'etcd')
 kubelet_conf=/etc/kubernetes/kubelet.conf
 kubelet_pki_path=/var/lib/kubelet/pki
@@ -56,7 +57,7 @@ function retrieve_system_container_ids_via_crictl {
 function find_runtime_endpoint {
     $config=$(grep containerRuntimeEndpoint $kubelet_conf)
     if [[ ! -z $config ]]; then
-        $cre=$(echo $config | (awk '{print $2}' | sed 's/"//g')
+        $cre=$(echo $config | awk '{print $2}' | sed 's/"//g')
     else
         $cre=$cri_endpoint
     fi
