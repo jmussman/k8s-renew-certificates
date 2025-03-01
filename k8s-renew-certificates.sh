@@ -4,17 +4,15 @@
 # Copyright (c) 2024-2025 Joel A Mussman. All rights reserved.
 #
 
+cri_endpoint=unix:///run/containerd/containerd.sock     # This changes depending on the container engine used.
+
 admin_conf=/etc/kubernetes/admin.conf
 containers=('kube-apiserver' 'kube-scheduler' 'kube-controller-manager' 'etcd')
-containerd_endpoint=unix:///run/containerd/containerd.sock
-docker_endpoint=unix:///var/run/docker.sock
 kubelet_pki_path=/var/lib/kubelet/pki
 kubelet_cert_path=$kubelet_pki_path/kubelet-client-current.pem
 kubelet_option='container-runtime-endpoint'
 kubernetes_cert_path=/etc/kubernetes/pki/apiserver-kubelet-client.crt
 kubernetes_key_path=/etc/kubernetes/pki/apiserver-kubelet-client.key
-major_cutoff=1
-minor_cutoff=23
 
 function wait_for_container_restart {
     while [[ true ]]; do   
@@ -35,14 +33,14 @@ function wait_for_broken_nodes {
     return 0
 }
 
-function stop_system_containers {
+function stop_system_containers_via_crictl {
     cre=$1; shift
     for container in "$@"; do
-        sudo crictl -r $cre stop ${container#*:} > /dev/null
+        sudo crictl -r $cre stop "${container}" > /dev/null
     done
 }
 
-function retrieve_system_container_ids {
+function retrieve_system_container_ids_via_crictl {
     container_ids=()
     for container in "${containers[@]}"; do
         container_ids=(${container_ids[@]} "$container:$(sudo crictl --runtime-endpoint $1 ps | grep $container | awk '{print $1}')") 
@@ -50,9 +48,29 @@ function retrieve_system_container_ids {
     echo ${container_ids[@]}
 }
 
+function stop_system_containers_via_docker {
+    for container in "$@"; do
+        sudo docker stop ${container} > /dev/null
+    done
+}
+
+function retrieve_system_container_ids_via_docker {
+    container_ids=()
+    for container in "${containers[@]}"; do
+        container_ids=(${container_ids[@]} "$container:$(sudo docker ps | grep $container | awk '{print $1}')") 
+    done
+    echo ${container_ids[@]}
+}
+
 function restart_kubernetes_system {
-    IFS=' ' read -r -a container_ids <<< $(retrieve_system_container_ids) $1
-    stop_system_containers $1 ${container_ids[@]} 2>&1 > /dev/null
+    if [[ ! -z $(which docker) && ! -z $(sudo docker ps | grep 'k8s_') ]]; then
+        IFS=' ' read -r -a container_ids <<< $(retrieve_system_container_ids_via_docker)
+        stop_system_containers_via_docker $1 ${container_ids[@]} 2>&1 > /dev/null
+    else
+        cre=$(find_runtime_endpoint)
+        IFS=' ' read -r -a container_ids <<< $(retrieve_system_container_ids_via_crictl) $cri_endpoint
+        stop_system_containers_via_crictl $1 ${container_ids[@]} 2>&1 > /dev/null
+    fi
 }
 
 function refresh_user_credentials {
@@ -65,31 +83,7 @@ function renew_certificates {
     sudo kubeadm certs check-expiration
 }
 
-function kubelet_endpoint_by_version {
-    kv=$(kubeadm version)
-    major=$(echo $kv | sed -e 's/^.*Major:"\([[:digit:]]*\).*$/\1/g')
-    minor=$(echo $kv | sed -e 's/^.*Minor:"\([[:digit:]]*\).*$/\1/g')
-    if (( $major > $major_cutoff || ($major == $major_cutoff && $minor > $minor_cutoff ))); then
-        echo $containerd_endpoint
-    else
-        echo $docker_endpoint
-    fi
-}
-
-function kubelet_endpoint_by_command {
-    pgrep kubelet > /dev/null && ps --no-headers -fp $(pgrep kubelet) | grep "$kubelet_option" | sed -e "s/^.*${option}=\([^ ]*\).*$/\1/g"
-}
-
-function find_runtime_endpoint {
-    endpoint=$(kubelet_endpoint_by_command)
-    if [[ -z $endpoint ]]; then
-        endpoint=$(kubelet_endpoint_by_version)
-    fi
-    echo $endpoint
-}
-
 function renew_unexpired_certificate {
-    cre=$(find_runtime_endpoint)
     echo "Generating new certificates."
     renew_certificates
     echo "Refreshing API credentials for the current user."
@@ -199,7 +193,8 @@ function main {
             echo $msg
             exit
         fi
-    elif [[ $(pgrep kube-apiserver) ]]; then
+    fi
+    if [[ $(pgrep kube-apiserver) ]]; then
         renew_unexpired_certificate containers
     else
         renew_expired_certificate
