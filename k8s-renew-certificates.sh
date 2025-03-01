@@ -102,7 +102,7 @@ function renew_certificates {
 }
 
 function renew_unexpired_certificate {
-    echo "Generating new certificates..."
+    echo "Generating new certificates, enter the password for sudo if prompted..."
     renew_certificates
     echo "Refreshing API credentials for the current user..."
     refresh_user_credentials
@@ -200,7 +200,7 @@ function main {
         echo $msg
         exit
     elif [[ "$1" != "-f" && "$1" != "--force" ]]; then
-        echo "Checking Kubernetes certificate status, enter the password for sudo if prompted:"
+        echo "Checking Kubernetes certificate status, enter the password for sudo if prompted..."
         msg=$(check_certificate_expiration)
         if [[ ! -z "$msg" ]]; then
             echo $msg
